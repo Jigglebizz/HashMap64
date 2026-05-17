@@ -12,7 +12,6 @@
 #define CORE_API
 #endif
 
-
 //---------------------------------------------------------------------------------
 template< typename V >
 class HashMap64
@@ -90,7 +89,7 @@ private:
 
 //---------------------------------------------------------------------------------
 // Murmur64
-uint32_t HashFunction( uint64_t input )
+static uint32_t HashFunction( uint64_t input )
 {
   input ^= input >> 33;
   input *= 0xff51afd7ed558ccdULL;
@@ -222,13 +221,14 @@ V* HashMap64< V >::Insert( uint64_t key )
     }
 
     idx = ( desired_idx + ctrl_idx_offset ) % m_Capacity;
-    group_idx += ( idx % kElemsPerMeta == kElemsPerMeta );
+    group_idx += ( idx % kElemsPerMeta == 0 );
     ctrl = m_Meta[ group_idx % m_GroupCount ].m_Control[ idx % kElemsPerMeta ];
   }
 
   // do insertion
   m_Meta[ group_idx % m_GroupCount ].m_Control[ idx % kElemsPerMeta ] = ctrl_to_insert;
   m_Elems[ idx ].m_Key = key;
+
   return &m_Elems[ idx ].m_Value;
 }
 
@@ -320,6 +320,7 @@ const V* HashMap64< V >::At( uint64_t key ) const
     }
 
     group_idx_cyclic++;
+    ctrl_idx = 0;
   }
   return nullptr;
 }
@@ -339,7 +340,7 @@ void HashMap64< V >::Remove( uint64_t key )
   while ( group_idx_cyclic < m_GroupCount )
   {
     uint32_t group_idx = group_idx_cyclic % m_GroupCount;
-    Group*   meta      = &m_Meta[ group_idx % m_GroupCount ];
+    Group*   meta      = &m_Meta[ group_idx ];
     // If anything has been set here before, it's a tombstone sentinel whether or not the empty bit is set
     __m512i meta_data      = _mm512_loadu_epi32( meta );
     uint16_t used_bitset   = _mm512_cmp_epi32_mask( meta_data, _mm512_setzero_si512(), _MM_CMPINT_NE );
@@ -355,7 +356,7 @@ void HashMap64< V >::Remove( uint64_t key )
           Elem* elem = &m_Elems[ group_idx * kElemsPerMeta + i_ctrl ];
           if ( elem->m_Key == key )
           { 
-            // We found it, return it!
+            // We found it, remove it!
             meta->m_Control[ i_ctrl ] &= ~kIsNotEmpty;
           }
         }
@@ -367,6 +368,7 @@ void HashMap64< V >::Remove( uint64_t key )
     }
 
     group_idx_cyclic++;
+    ctrl_idx = 0;
   }
 }
 
