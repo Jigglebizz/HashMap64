@@ -1,0 +1,5 @@
+*.user
+x64/*
+packages/*
+.vs/*
+HashMap_Test/x64/*
