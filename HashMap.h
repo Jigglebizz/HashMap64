@@ -18,7 +18,7 @@ class HashMap64
 {
 public:
   HashMap64() 
-  : m_Backing (nullptr )
+  : m_Backing   (nullptr )
   #ifdef USE_HEAP
   , m_OwningHeap( nullptr )
   #endif
@@ -27,8 +27,6 @@ public:
   , m_Capacity  ( 0 ) 
   , m_GroupCount( 0 )
   {}
-
-  static constexpr uint32_t kDefaultBucketNum = 16;
 
                    void     CORE_API InitWithBacking        ( void* backing, uint32_t capacity );
                    #ifdef USE_HEAP
@@ -236,46 +234,8 @@ V* HashMap64< V >::Insert( uint64_t key )
 template< typename V >
 V* HashMap64< V >::At( uint64_t key )
 {
-  ASSERT_MSG( m_Backing != nullptr, "HashMap not initialized!" );
-
-  ControlT       ctrl_cmp         = kIsNotEmpty | CtrlFor( key );
-  uint32_t       start_idx        = HashFunction( key ) % m_Capacity;
-  uint32_t       group_idx_cyclic = start_idx / kElemsPerMeta;
-  uint32_t       ctrl_idx         = start_idx - ( group_idx_cyclic * kElemsPerMeta );
-  
-  while ( group_idx_cyclic < m_GroupCount )
-  {
-    uint32_t group_idx = group_idx_cyclic % m_GroupCount;
-    Group*   meta      = &m_Meta[ group_idx % m_GroupCount ];
-    // If anything has been set here before, it's a tombstone sentinel whether or not the empty bit is set
-    __m512i  meta_data     = _mm512_loadu_epi32( meta );
-    uint16_t used_bitset   = _mm512_cmp_epi32_mask( meta_data, _mm512_setzero_si512(), _MM_CMPINT_NE );
-
-    for ( uint32_t i_ctrl = ctrl_idx; i_ctrl < 16; ++i_ctrl )
-    {
-      // This slot is not empty
-      if ( used_bitset & ( 0x0001 << i_ctrl ) )
-      {
-        // Last 7 bits of hash match, very potentially a match. Gonna do a cache invalidate here to check
-        if ( meta->m_Control[ i_ctrl ] == ctrl_cmp )
-        {
-          Elem* elem = &m_Elems[ group_idx * kElemsPerMeta + i_ctrl ];
-          if ( elem->m_Key == key )
-          { 
-            // We found it, return it!
-            return &elem->m_Value;
-          }
-        }
-      }
-      else
-      {
-        return nullptr; // Found an empty slot, we're done
-      }
-    }
-
-    group_idx_cyclic++;
-  }
-  return nullptr;
+  const V* v = const_cast< const HashMap64<V>* >(this)->At( key );
+  return const_cast<V*>( v );
 }
 
 //---------------------------------------------------------------------------------
@@ -300,7 +260,7 @@ const V* HashMap64< V >::At( uint64_t key ) const
     for ( uint32_t i_ctrl = ctrl_idx; i_ctrl < 16; ++i_ctrl)
     {
       // This slot is not empty
-      if ( used_bitset & ( 0x0001 << i_ctrl ) )
+      if ( _bextr_u32( used_bitset, i_ctrl, 1 ) )
       {
         // Last 7 bits of hash match, very potentially a match. Gonna do a cache invalidate here to check
         if ( meta->m_Control[ i_ctrl ] == ctrl_cmp )
@@ -348,7 +308,7 @@ void HashMap64< V >::Remove( uint64_t key )
     for ( uint32_t i_ctrl = ctrl_idx; i_ctrl < 16; ++i_ctrl)
     {
       // This slot is not empty
-      if ( used_bitset & ( 0x0001 << i_ctrl ) )
+      if ( _bextr_u32( used_bitset, i_ctrl, 1 ) )
       {
         // Last 7 bits of hash match, very potentially a match. Gonna do a cache invalidate here to check
         if ( meta->m_Control[ i_ctrl ] == ctrl_cmp )
