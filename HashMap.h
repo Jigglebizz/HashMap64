@@ -207,13 +207,17 @@ V* HashMap64< V >::Insert( uint64_t key )
   uint16_t ctrl_mask         = (uint16_t)(0xffff << ctrl_idx);
   __m512i  not_empty_mask    = _mm512_set1_epi32( kIsNotEmpty );
   __m512i  potential_dup_val = _mm512_set1_epi32( ctrl_to_insert );
-  do 
+
+  uint16_t unavailable_slots_bitset = 0xffff;
+  uint16_t empty_slot               = 0xffff;
+
+  do
   {
     __m512i  meta_data                = _mm512_loadu_epi32   ( meta );
     __m512i  not_empty                = _mm512_and_epi32     ( meta_data, not_empty_mask );
     uint16_t used_bitset              = _mm512_cmp_epi32_mask( not_empty, _mm512_setzero_si512(), _MM_CMPINT_NE );
-    uint16_t unavailable_slots_bitset = ( used_bitset & ctrl_mask ) | ~ctrl_mask;
-    uint16_t empty_slot               = std::countr_one( unavailable_slots_bitset );
+             unavailable_slots_bitset = ( used_bitset & ctrl_mask ) | ~ctrl_mask;
+             empty_slot               = std::countr_one( unavailable_slots_bitset );
 
     // Check for duplicates
     // truncate potential duplicates to only within available range
@@ -233,27 +237,25 @@ V* HashMap64< V >::Insert( uint64_t key )
       potential_dup_bitset &= ~( 1 << potential_dup_idx );
     }
 
-
-    if ( unavailable_slots_bitset == 0xffff ) // All slots full, let's move along
+    // All slots full, let's move along
+    if ( unavailable_slots_bitset == 0xffff )
     {
       group_idx++;
       ctrl_idx_offset += kElemsPerMeta;
-    }
-    else // We have an empty space, let's insert there
-    {
-      ctrl_idx_offset += empty_slot;
-      if ( ctrl_idx_offset > m_Capacity )
-      {
-        return nullptr;
-      }
-      idx = ( ( desired_idx ) + ctrl_idx_offset ) % m_Capacity;
-      break;
     }
 
     ctrl_mask = 0xffff;
     ctrl_idx  = 0;
     meta      = &m_Meta[ group_idx % m_GroupCount ];
-  } while ( 1 );
+  } while ( unavailable_slots_bitset == 0xffff && ctrl_idx_offset < m_Capacity );
+
+  // breaking out of the loop means we've either found an empty space, or exceeded capacity
+  ctrl_idx_offset += empty_slot;
+  if ( ctrl_idx_offset >= m_Capacity )
+  {
+    return nullptr;
+  }
+  idx = ( ( desired_idx ) + ctrl_idx_offset ) % m_Capacity;
 
   // do insertion
   m_Meta[ group_idx % m_GroupCount ].m_Control[ idx % kElemsPerMeta ] = ctrl_to_insert;
