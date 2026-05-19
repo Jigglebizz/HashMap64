@@ -196,32 +196,64 @@ V* HashMap64< V >::Insert( uint64_t key )
   uint32_t       desired_idx     = HashFunction( key ) % m_Capacity;
   const uint32_t start_group_idx = desired_idx / kElemsPerMeta;
   uint32_t       group_idx       = start_group_idx;
-  uint32_t       ctrl_idx_offset = 0;
-  uint32_t       idx             = ( desired_idx + ctrl_idx_offset ) % m_Capacity;
+  uint32_t       ctrl_idx_offset = 0; // from desired_idx
+  uint32_t       idx             = desired_idx;
+
+  ctrl_idx_offset -= desired_idx % kElemsPerMeta;
 
   // find empty slot
-  ControlT ctrl = m_Meta[ group_idx % m_GroupCount ].m_Control[ idx % kElemsPerMeta ];
-  while ( ctrl & kIsNotEmpty )
+  Group*   meta              = &m_Meta[ group_idx ];
+  uint32_t ctrl_idx          = idx % kElemsPerMeta;
+  uint16_t ctrl_mask         = (uint16_t)(0xffff << ctrl_idx);
+  __m512i  not_empty_mask    = _mm512_set1_epi32( kIsNotEmpty );
+  __m512i  potential_dup_val = _mm512_set1_epi32( ctrl_to_insert );
+  do 
   {
-    // Before moving on, we need to check if we're a duplicate of an existing key
-    if ( ctrl == ctrl_to_insert )
+    __m512i  meta_data                = _mm512_loadu_epi32   ( meta );
+    __m512i  not_empty                = _mm512_and_epi32     ( meta_data, not_empty_mask );
+    uint16_t used_bitset              = _mm512_cmp_epi32_mask( not_empty, _mm512_setzero_si512(), _MM_CMPINT_NE );
+    uint16_t unavailable_slots_bitset = ( used_bitset & ctrl_mask ) | ~ctrl_mask;
+    uint16_t empty_slot               = std::countr_one( unavailable_slots_bitset );
+
+    // Check for duplicates
+    // truncate potential duplicates to only within available range
+    uint16_t dup_check_bitset = ~(uint16_t)(0xffff << empty_slot);
+
+    uint16_t potential_dup_bitset = _mm512_cmp_epi32_mask( meta_data, potential_dup_val, _MM_CMPINT_EQ );
+    potential_dup_bitset &= dup_check_bitset;
+
+    while ( potential_dup_bitset )
     {
-      if ( m_Elems[ idx ].m_Key == key )
+      uint16_t potential_dup_idx = std::countr_zero( potential_dup_bitset );
+      uint32_t dup_elem_idx = ( group_idx % m_GroupCount ) * kElemsPerMeta + potential_dup_idx;
+      if ( m_Elems[ dup_elem_idx ].m_Key == key )
       {
         return nullptr;
       }
+      potential_dup_bitset &= ~( 1 << potential_dup_idx );
     }
 
-    ctrl_idx_offset++;
-    if ( ctrl_idx_offset == m_Capacity )
+
+    if ( unavailable_slots_bitset == 0xffff ) // All slots full, let's move along
     {
-      return nullptr;
+      group_idx++;
+      ctrl_idx_offset += kElemsPerMeta;
+    }
+    else // We have an empty space, let's insert there
+    {
+      ctrl_idx_offset += empty_slot;
+      if ( ctrl_idx_offset > m_Capacity )
+      {
+        return nullptr;
+      }
+      idx = ( ( desired_idx ) + ctrl_idx_offset ) % m_Capacity;
+      break;
     }
 
-    idx = ( desired_idx + ctrl_idx_offset ) % m_Capacity;
-    group_idx += ( idx % kElemsPerMeta == 0 );
-    ctrl = m_Meta[ group_idx % m_GroupCount ].m_Control[ idx % kElemsPerMeta ];
-  }
+    ctrl_mask = 0xffff;
+    ctrl_idx  = 0;
+    meta      = &m_Meta[ group_idx % m_GroupCount ];
+  } while ( 1 );
 
   // do insertion
   m_Meta[ group_idx % m_GroupCount ].m_Control[ idx % kElemsPerMeta ] = ctrl_to_insert;

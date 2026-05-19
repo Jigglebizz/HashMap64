@@ -145,7 +145,7 @@ TEST( Basic, DuplicateKeys )
 //---------------------------------------------------------------------------------
 TEST( Basic, RemoveMissingKey )
 {
-    HashMapT hash_map;
+  HashMapT hash_map;
   hash_map.InitWithBacking( kHashMapBacking, kHashMapSize );
 
   hash_map.Remove( 1 );
@@ -153,4 +153,25 @@ TEST( Basic, RemoveMissingKey )
   ASSERT_EQ( hash_map.GetCount(), 0 );
 
   hash_map.Destroy();
+}
+
+//---------------------------------------------------------------------------------
+TEST( Basic, LotsOfInserts )
+{
+  static constexpr uint32_t kHugeHashMapSize = 1048576;
+
+  void* backing = malloc( HashMapT::GetRequiredBackingSize( kHugeHashMapSize ) );
+
+  HashMapT hash_map;
+  hash_map.InitWithBacking( backing, kHugeHashMapSize);
+
+  for ( uint32_t i_val = 0; i_val < kHugeHashMapSize - 1; ++i_val )
+  {
+    hash_map.Insert( 1 + i_val, i_val );
+  }
+
+  EXPECT_EQ( hash_map.GetCount(), kHugeHashMapSize - 1 );
+
+  hash_map.Destroy();
+  free( backing );
 }
