@@ -3,3 +3,4 @@ x64/*
 packages/*
 .vs/*
 HashMap_Test/x64/*
+avx_capability_finder.py
