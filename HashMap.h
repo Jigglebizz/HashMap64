@@ -134,6 +134,7 @@ template< typename V >
 void HashMap64< V >::InitWithBacking( void* backing, uint32_t capacity )
 {
   ASSERT_MSG( capacity % kElemsPerMeta == 0 , "Capacity must be a multiple of 16" );
+  ASSERT_MSG( (uint64_t)backing % kElemsPerMeta == 0, "Backing must be aligned to a cacheline" );
 
   m_Backing    = backing;
   m_Capacity   = capacity;
