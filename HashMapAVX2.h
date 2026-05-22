@@ -33,13 +33,14 @@ uint32_t HashMap64AVX2< V >::GetCount( ) const
   uint32_t count = 0;
   for ( uint32_t i_grp = 0; i_grp < this->m_GroupCount; ++i_grp )
   {
-    __m256i  used_bit     = _mm256_set1_epi32( HashMap64ImplBase< V >::kIsNotEmpty );
+    static_assert( HashMap64ImplBase< V >::kIsNotEmpty == 0x80000000, "Assuming these are equal for this algorithm" );
+
     __m256i  meta_data1   = _mm256_loadu_si256( (const __m256i*)&this->m_Meta[ i_grp ] );
     __m256i  meta_data2   = _mm256_loadu_si256( (const __m256i*)&this->m_Meta[ i_grp ].m_Control[ HashMap64ImplBase< V >::kElemsPerMeta / 2 ]);
-    __m256i  used_meta1   = _mm256_and_epi32 ( meta_data1, used_bit );
-    __m256i  used_meta2   = _mm256_and_epi32 ( meta_data2, used_bit );
-    uint32_t used_bitset1 = _mm256_movemask_epi8( used_meta1 );
-    uint32_t used_bitset2 = _mm256_movemask_epi8( used_meta2 );
+    uint32_t used_bitset1 = _mm256_movemask_epi8( meta_data1 );
+    uint32_t used_bitset2 = _mm256_movemask_epi8( meta_data2 );
+             used_bitset1 = _pext_u32( used_bitset1, 0x88888888 );
+             used_bitset2 = _pext_u32( used_bitset2, 0x88888888 );
 
     count += __popcnt( used_bitset1 ) + __popcnt( used_bitset2 );
   }
@@ -105,9 +106,9 @@ V* HashMap64AVX2< V >::Insert( uint64_t key )
 
     __m256i  potential_dup_1 = _mm256_cmpeq_epi32   ( meta_data1, potential_dup_val );
     __m256i  potential_dup_2 = _mm256_cmpeq_epi32   ( meta_data2, potential_dup_val );
-    uint32_t dup_bitset_1    = _mm256_movemask_epi8 ( ne_eq_0_1 );
-    uint32_t dup_bitset_2    = _mm256_movemask_epi8 ( ne_eq_0_2 );
-    uint16_t potential_dup_bitset = ~(uint16_t)( _pext_u32( dup_bitset_1, 0x88888888 ) | ( _pext_u32( dup_bitset_2, 0x88888888 ) << 8) );
+    uint32_t dup_bitset_1    = _mm256_movemask_epi8 ( potential_dup_1 );
+    uint32_t dup_bitset_2    = _mm256_movemask_epi8 ( potential_dup_2 );
+    uint16_t potential_dup_bitset = (uint16_t)( _pext_u32( dup_bitset_1, 0x88888888 ) | ( _pext_u32( dup_bitset_2, 0x88888888 ) << 8) );
 
     potential_dup_bitset &= dup_check_bitset;
 
@@ -274,13 +275,14 @@ bool HashMap64AVX2< V >::IsFull() const
   uint32_t count = 0;
   for ( uint32_t i_grp = 0; i_grp < this->m_GroupCount; ++i_grp )
   {
-    __m256i  used_bit     = _mm256_set1_epi32( HashMap64ImplBase< V >::kIsNotEmpty );
+    static_assert( HashMap64ImplBase< V >::kIsNotEmpty == 0x80000000, "Assuming these are equal for this algorithm" );
+
     __m256i  meta_data1   = _mm256_loadu_si256( (const __m256i*)&this->m_Meta[ i_grp ] );
     __m256i  meta_data2   = _mm256_loadu_si256( (const __m256i*)&this->m_Meta[ i_grp ].m_Control[ HashMap64ImplBase< V >::kElemsPerMeta / 2 ]);
-    __m256i  used_meta1   = _mm256_and_epi32 ( meta_data1, used_bit );
-    __m256i  used_meta2   = _mm256_and_epi32 ( meta_data2, used_bit );
-    uint32_t used_bitset1 = _mm256_movemask_epi8( used_meta1 );
-    uint32_t used_bitset2 = _mm256_movemask_epi8( used_meta2 );
+    uint32_t used_bitset1 = _mm256_movemask_epi8( meta_data1 );
+    uint32_t used_bitset2 = _mm256_movemask_epi8( meta_data2 );
+             used_bitset1 = _pext_u32( used_bitset1, 0x88888888 );
+             used_bitset2 = _pext_u32( used_bitset2, 0x88888888 );
 
     if ( used_bitset1 != 0x8888 && used_bitset2 != 0x8888 )
     {
@@ -297,13 +299,14 @@ bool HashMap64AVX2< V >::IsEmpty() const
 {
   for ( uint32_t i_grp = 0; i_grp < this->m_GroupCount; ++i_grp )
   {
-    __m256i  used_bit     = _mm256_set1_epi32( HashMap64ImplBase< V >::kIsNotEmpty );
+    static_assert( HashMap64ImplBase< V >::kIsNotEmpty == 0x80000000, "Assuming these are equal for this algorithm" );
+
     __m256i  meta_data1   = _mm256_loadu_si256( (const __m256i*)&this->m_Meta[ i_grp ] );
     __m256i  meta_data2   = _mm256_loadu_si256( (const __m256i*)&this->m_Meta[ i_grp ].m_Control[ HashMap64ImplBase< V >::kElemsPerMeta / 2 ]);
-    __m256i  used_meta1   = _mm256_and_epi32 ( meta_data1, used_bit );
-    __m256i  used_meta2   = _mm256_and_epi32 ( meta_data2, used_bit );
-    uint32_t used_bitset1 = _mm256_movemask_epi8( used_meta1 );
-    uint32_t used_bitset2 = _mm256_movemask_epi8( used_meta2 );
+    uint32_t used_bitset1 = _mm256_movemask_epi8( meta_data1 );
+    uint32_t used_bitset2 = _mm256_movemask_epi8( meta_data2 );
+             used_bitset1 = _pext_u32( used_bitset1, 0x88888888 );
+             used_bitset2 = _pext_u32( used_bitset2, 0x88888888 );
 
     if ( used_bitset1 > 0 || used_bitset2 > 0 )
     {
