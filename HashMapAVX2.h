@@ -77,7 +77,6 @@ V* HashMap64AVX2< V >::Insert( uint64_t key )
   Group*   meta              = &this->m_Meta[ group_idx ];
   uint32_t ctrl_idx          = idx % HashMap64ImplBase< V >::kElemsPerMeta;
   uint16_t ctrl_mask         = (uint16_t)(0xffff << ctrl_idx);
-  __m256i  not_empty_mask    = _mm256_set1_epi32( HashMap64ImplBase< V >::kIsNotEmpty );
   __m256i  potential_dup_val = _mm256_set1_epi32( ctrl_to_insert );
   __m256i  zero_lane         = _mm256_setzero_si256();
 
@@ -87,15 +86,12 @@ V* HashMap64AVX2< V >::Insert( uint64_t key )
   do
   {
     __m256i  meta_data1    = _mm256_loadu_epi32   ( meta );
-    __m256i  not_empty1    = _mm256_and_epi32     ( meta_data1, not_empty_mask );
-    __m256i  ne_eq_0_1     = _mm256_cmpeq_epi32   ( not_empty1, zero_lane );
-    uint32_t used_bitset1  = _mm256_movemask_epi8 ( ne_eq_0_1 );
-    __m256i  meta_data2    = _mm256_loadu_epi32   ( &meta->m_Control[ HashMap64ImplBase< V >::kElemsPerMeta / 2 ] );
-    __m256i  not_empty2    = _mm256_and_epi32     ( meta_data2, not_empty_mask );
-    __m256i  ne_eq_0_2     = _mm256_cmpeq_epi32   ( not_empty2, zero_lane );
-    uint32_t used_bitset2  = _mm256_movemask_epi8 ( ne_eq_0_2 );
-    uint64_t used_bitset3  = (uint64_t)used_bitset1 | ( (uint64_t)used_bitset2 << 32 );
-    uint16_t used_bitset   = ~(uint16_t)_pext_u64( used_bitset3, 0x8888888888888888 );
+    __m256i  meta_data2    = _mm256_loadu_epi32   ( (uint8_t*)meta + 32 );
+    uint32_t used_bitset1  = _mm256_movemask_epi8 ( meta_data1 );
+    uint32_t used_bitset2  = _mm256_movemask_epi8 ( meta_data2 );
+
+    uint64_t used_bitset_cmp = (uint64_t)used_bitset1 | ((uint64_t)used_bitset2 << 32);
+    uint64_t used_bitset     = _pext_u64( used_bitset_cmp, 0x8888888888888888 );
 
              unavailable_slots_bitset = ( used_bitset & ctrl_mask ) | ~ctrl_mask;
              empty_slot               = std::countr_one( unavailable_slots_bitset );
@@ -174,7 +170,7 @@ const V* HashMap64AVX2< V >::At( uint64_t key ) const
     Group*   meta          = &this->m_Meta[ group_idx % this->m_GroupCount ];
     // If anything has been set here before, it's a tombstone sentinel whether or not the empty bit is set
     __m256i  meta_data1   = _mm256_loadu_si256( (const __m256i*)meta );
-    __m256i  meta_data2   = _mm256_loadu_si256( (const __m256i*)&meta->m_Control[ HashMap64ImplBase< V >::kElemsPerMeta / 2 ] );
+    __m256i  meta_data2   = _mm256_loadu_si256( (const __m256i*)((uint8_t*)meta + 32 ) );
     __m256i  meta_eq_0_1  = _mm256_cmpeq_epi32( meta_data1, zero_lane );
     __m256i  meta_eq_0_2  = _mm256_cmpeq_epi32( meta_data2, zero_lane );
     uint32_t used_bitset1 = _mm256_movemask_epi8( meta_eq_0_1 );
