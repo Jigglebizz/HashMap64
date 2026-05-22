@@ -4,6 +4,7 @@
 #include <intrin.h>
 #include "HashMapImpl.h"
 #include "HashMapAVX512.h"
+#include "HashMapAVX2.h"
 
 #ifndef CORE_API
 #define CORE_API
@@ -88,6 +89,12 @@ void HashMap64< V >::InitWithBacking( void* backing, uint32_t capacity )
   if ( s_VectorizationCapabilities.GetSupport() == VectorizationCapability::kSupportAvx512 )
   {
     using HashMapT = HashMap64AVX512< V >;
+    m_Impl  = new (backing) HashMapT();
+    backing = (void*)(((uint8_t*)backing) + sizeof( HashMapT ));
+  }
+  else if ( s_VectorizationCapabilities.GetSupport() == VectorizationCapability::kSupportAvx2 )
+  {
+    using HashMapT = HashMap64AVX2< V >;
     m_Impl  = new (backing) HashMapT();
     backing = (void*)(((uint8_t*)backing) + sizeof( HashMapT ));
   }

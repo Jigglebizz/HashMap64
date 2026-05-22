@@ -101,6 +101,7 @@
   </ItemDefinitionGroup>
   <ItemGroup>
     <ClInclude Include="HashMap.h" />
+    <ClInclude Include="HashMapAVX2.h" />
     <ClInclude Include="HashMapAVX512.h" />
     <ClInclude Include="HashMapImpl.h" />
     <ClInclude Include="pch.h" />

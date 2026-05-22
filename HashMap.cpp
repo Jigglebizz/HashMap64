@@ -1,6 +1,5 @@
 #include "HashMap.h"
 
-
 //---------------------------------------------------------------------------------
 //
 // Vectorization support determination
@@ -17,7 +16,12 @@ VectorizationCapability::VectorizationCapability()
 
   enum CpuCapabilitiesFlags
   {
-    kCapabilityEbxAvx512F = ( 1 << 16 ),
+    kCapabilityEbxAvx512F = 
+      #ifndef DISABLE_AVX_512 
+      ( 1 << 16 ),
+      #else
+      0,
+      #endif
     kCapabilityEbxAvx2    = ( 1 << 5  )
   };
 
