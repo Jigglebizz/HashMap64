@@ -214,34 +214,34 @@ void HashMap64AVX2< V >::Remove( uint64_t key )
   {
     uint32_t group_idx   = group_idx_cyclic % this->m_GroupCount;
     Group*   meta        = &this->m_Meta[ group_idx ];
-    // If anything has been set here before, it's a tombstone sentinel whether or not the empty bit is set
-    __m256i  meta_data1   = _mm256_loadu_si256( (const __m256i*)meta );
-    __m256i  meta_data2   = _mm256_loadu_si256( (const __m256i*)&meta->m_Control[ kHalfElemsPerMeta ] );
-    __m256i  meta_eq_0_1  = _mm256_cmpeq_epi32( meta_data1, zero_lane );
-    __m256i  meta_eq_0_2  = _mm256_cmpeq_epi32( meta_data2, zero_lane );
-    uint32_t used_bitset1 = _mm256_movemask_epi8( meta_eq_0_1 );
-    uint32_t used_bitset2 = _mm256_movemask_epi8( meta_eq_0_2 );
-    uint16_t used_bitset  = ~(uint16_t)( _pext_u32( used_bitset1, 0x88888888 ) | ( _pext_u32( used_bitset2, 0x88888888 ) << 8) );
-
-    for ( uint32_t i_ctrl = ctrl_idx; i_ctrl < 16; ++i_ctrl)
+    for ( uint32_t i_subgrp = 0; i_subgrp < 2; ++i_subgrp )
     {
-      // This slot is not empty
-      if ( _bextr_u32( used_bitset, i_ctrl, 1 ) )
+      // If anything has been set here before, it's a tombstone sentinel whether or not the empty bit is set
+      __m256i  meta_data    = _mm256_loadu_si256( (const __m256i*)((uint8_t*)meta + ( 32 * i_subgrp ) ) );
+      __m256i  meta_eq_0    = _mm256_cmpeq_epi32( meta_data, zero_lane );
+      uint32_t used_bitset  = _mm256_movemask_epi8( meta_eq_0 );
+               used_bitset  = ~_pext_u32( used_bitset, 0x88888888 );
+
+      for ( uint32_t i_ctrl = ctrl_idx; i_ctrl < 16; ++i_ctrl)
       {
-        // Last 7 bits of hash match, very potentially a match. Gonna do a cache invalidate here to check
-        if ( meta->m_Control[ i_ctrl ] == ctrl_cmp )
+        // This slot is not empty
+        if ( _bextr_u32( used_bitset, i_ctrl, 1 ) )
         {
-          Elem* elem = &this->m_Elems[ group_idx * kElemsPerMeta + i_ctrl ];
-          if ( elem->m_Key == key )
-          { 
-            // We found it, remove it!
-            meta->m_Control[ i_ctrl ] &= ~HashMap64ImplBase< V >::kIsNotEmpty;
+          // Last 7 bits of hash match, very potentially a match. Gonna do a cache invalidate here to check
+          if ( meta->m_Control[ i_ctrl ] == ctrl_cmp )
+          {
+            Elem* elem = &this->m_Elems[ group_idx * kElemsPerMeta + i_ctrl ];
+            if ( elem->m_Key == key )
+            { 
+              // We found it, remove it!
+              meta->m_Control[ i_ctrl ] &= ~HashMap64ImplBase< V >::kIsNotEmpty;
+            }
           }
         }
-      }
-      else
-      {
-        return; // Found an empty slot, we're done
+        else
+        {
+          return; // Found an empty slot, we're done
+        }
       }
     }
 
