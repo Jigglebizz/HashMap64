@@ -1,5 +1,6 @@
 #include <immintrin.h>
 #include <bit>
+#include <algorithm>
 
 #include "HashMapImpl.h"
 
@@ -25,7 +26,10 @@ private:
   using Group    = typename HashMap64ImplBase< V >::Group;
   using Elem     = typename HashMap64ImplBase< V >::Elem;
 
-  uint8_t* GetSubGrp( uint32_t grp_idx, uint32_t subgrp ) const;
+  static constexpr uint32_t kElemsPerMeta     = HashMap64ImplBase<V>::kElemsPerMeta;
+  static constexpr uint32_t kHalfElemsPerMeta = HashMap64ImplBase<V>::kElemsPerMeta / 2;
+
+  ControlT* GetSubGrp( uint32_t grp_idx, uint32_t subgrp ) const;
 };
 
 //---------------------------------------------------------------------------------
@@ -39,7 +43,7 @@ uint32_t HashMap64AVX2< V >::GetCount( ) const
     {
       static_assert( HashMap64ImplBase< V >::kIsNotEmpty == 0x80000000, "Assuming these are equal for this algorithm" );
 
-      __m256i  meta_data   = _mm256_loadu_si256( (const __m256i*)GetSubGrp( i_grp, i_subgrp ) );
+      __m256i  meta_data   = _mm256_loadu_epi32( GetSubGrp( i_grp, i_subgrp ) );
       uint32_t used_bitset = _mm256_movemask_epi8( meta_data );
                used_bitset = _pext_u32( used_bitset, 0x88888888 );
 
@@ -68,51 +72,40 @@ V* HashMap64AVX2< V >::Insert( uint64_t key )
 
   ControlT        ctrl_to_insert  = HashMap64ImplBase< V >::CtrlFor( key ) | HashMap64ImplBase< V >::kIsNotEmpty;
   uint32_t        desired_idx     = HashMap64ImplBase< V >::HashFunction( key ) % this->m_Capacity;
-  const uint32_t  start_group_idx = desired_idx / HashMap64ImplBase<V>::kElemsPerMeta;
+  const uint32_t  start_group_idx = desired_idx / kElemsPerMeta;
   uint32_t        group_idx       = start_group_idx;
   uint32_t        ctrl_idx_offset = 0; // from desired_idx
   uint32_t        idx             = desired_idx;
 
-  ctrl_idx_offset -= desired_idx % HashMap64ImplBase<V>::kElemsPerMeta;
+  ctrl_idx_offset -= desired_idx % kHalfElemsPerMeta;
 
-  // find empty slot
-  Group*   meta              = &this->m_Meta[ group_idx ];
-  uint32_t ctrl_idx          = idx % HashMap64ImplBase< V >::kElemsPerMeta;
-  uint16_t ctrl_mask         = (uint16_t)(0xffff << ctrl_idx);
   __m256i  potential_dup_val = _mm256_set1_epi32( ctrl_to_insert );
 
-  uint16_t unavailable_slots_bitset = 0xffff;
-  uint16_t empty_slot               = 0xffff;
+  // progress one half-group at a time
+  uint32_t i_subgrp        = ( desired_idx & 0x08 ) != 0;
+  uint32_t ctrl_subgr_idx  = idx % kHalfElemsPerMeta;
+  uint32_t ctrl_subgr_mask = 0xffffffff << ctrl_subgr_idx;
 
+  uint32_t empty_slot = 0xffffffff;
   do
   {
-    __m256i  meta_data1    = _mm256_loadu_epi32   ( meta );
-    __m256i  meta_data2    = _mm256_loadu_epi32   ( (uint8_t*)meta + 32 );
-    uint32_t used_bitset1  = _mm256_movemask_epi8 ( meta_data1 );
-    uint32_t used_bitset2  = _mm256_movemask_epi8 ( meta_data2 );
+    // First determine which slots are in use, and make sure not to use anything beyi=ond the first empty slot
+    __m256i  meta_data   = _mm256_loadu_epi32   ( GetSubGrp( group_idx % this->m_GroupCount, i_subgrp ) );
+    uint32_t used_bitset = _mm256_movemask_epi8 ( meta_data );
+             used_bitset = _pext_u32( used_bitset, 0x88888888 );
 
-    uint64_t used_bitset_cmp = (uint64_t)used_bitset1 | ((uint64_t)used_bitset2 << 32);
-    uint64_t used_bitset     = _pext_u64( used_bitset_cmp, 0x8888888888888888 );
-
-             unavailable_slots_bitset = ( used_bitset & ctrl_mask ) | ~ctrl_mask;
+    uint32_t unavailable_slots_bitset = ( used_bitset & ctrl_subgr_mask) | ~ctrl_subgr_mask;
              empty_slot               = std::countr_one( unavailable_slots_bitset );
 
-    // Check for duplicates
-    // truncate potential duplicates to only within available range
-    uint16_t dup_check_bitset = ~(uint16_t)(0xffff << empty_slot);
-
-    __m256i  potential_dup_1 = _mm256_cmpeq_epi32   ( meta_data1, potential_dup_val );
-    __m256i  potential_dup_2 = _mm256_cmpeq_epi32   ( meta_data2, potential_dup_val );
-    uint32_t dup_bitset_1    = _mm256_movemask_epi8 ( potential_dup_1 );
-    uint32_t dup_bitset_2    = _mm256_movemask_epi8 ( potential_dup_2 );
-    uint16_t potential_dup_bitset = (uint16_t)( _pext_u32( dup_bitset_1, 0x88888888 ) | ( _pext_u32( dup_bitset_2, 0x88888888 ) << 8) );
-
-    potential_dup_bitset &= dup_check_bitset;
+             // check for duplicates
+    __m256i  potential_dup_cmp    = _mm256_cmpeq_epi32  ( meta_data, potential_dup_val );
+    uint32_t potential_dup_bitset = _mm256_movemask_epi8( potential_dup_cmp );
+             potential_dup_bitset = _pext_u32( potential_dup_bitset, 0x88888888 );
 
     while ( potential_dup_bitset )
     {
       uint16_t potential_dup_idx = std::countr_zero( potential_dup_bitset );
-      uint32_t dup_elem_idx = ( group_idx % this->m_GroupCount ) * HashMap64ImplBase<V>::kElemsPerMeta + potential_dup_idx;
+      uint32_t dup_elem_idx = ( group_idx % this->m_GroupCount ) * kElemsPerMeta + potential_dup_idx + 8 * i_subgrp;
       if ( this->m_Elems[ dup_elem_idx ].m_Key == key )
       {
         return nullptr;
@@ -120,20 +113,17 @@ V* HashMap64AVX2< V >::Insert( uint64_t key )
       potential_dup_bitset &= ~( 1 << potential_dup_idx );
     }
 
-    // All slots full, let's move along
-    if ( unavailable_slots_bitset == 0xffff )
+    ctrl_subgr_idx  = 0;
+    ctrl_subgr_mask = 0xffffffff;
+    ctrl_idx_offset += empty_slot; // todo: maybe won't work? check that empty slot never exceeds 8
+    if ( empty_slot >= kHalfElemsPerMeta )
     {
-      group_idx++;
-      ctrl_idx_offset += HashMap64ImplBase< V >::kElemsPerMeta;
+      i_subgrp   = ( i_subgrp + 1 ) % 2;
+      group_idx += 1 - i_subgrp;
     }
-
-    ctrl_mask = 0xffff;
-    ctrl_idx  = 0;
-    meta      = &this->m_Meta[ group_idx % this->m_GroupCount ];
-  } while ( unavailable_slots_bitset == 0xffff && ctrl_idx_offset < this->m_Capacity );
+  } while ( empty_slot >= kHalfElemsPerMeta && ctrl_idx_offset < this->m_Capacity );
 
   // breaking out of the loop means we've either found an empty space, or exceeded capacity
-  ctrl_idx_offset += empty_slot;
   if ( ctrl_idx_offset >= this->m_Capacity )
   {
     return nullptr;
@@ -141,7 +131,7 @@ V* HashMap64AVX2< V >::Insert( uint64_t key )
   idx = ( ( desired_idx ) + ctrl_idx_offset ) % this->m_Capacity;
 
   // do insertion
-  this->m_Meta[ group_idx % this->m_GroupCount ].m_Control[ idx % HashMap64ImplBase< V >::kElemsPerMeta ] = ctrl_to_insert;
+  GetSubGrp( group_idx % this->m_GroupCount, i_subgrp )[ empty_slot ] = ctrl_to_insert;
   this->m_Elems[ idx ].m_Key = key;
 
   return &this->m_Elems[ idx ].m_Value;
@@ -161,8 +151,8 @@ const V* HashMap64AVX2< V >::At( uint64_t key ) const
 {
   ControlT ctrl_cmp         = HashMap64ImplBase< V >::kIsNotEmpty | HashMap64ImplBase< V >::CtrlFor( key );
   uint32_t start_idx        = HashMap64ImplBase< V >::HashFunction( key ) % this->m_Capacity;
-  uint32_t group_idx_cyclic = start_idx / HashMap64ImplBase< V >::kElemsPerMeta;
-  uint32_t ctrl_idx         = start_idx - ( group_idx_cyclic * HashMap64ImplBase< V >::kElemsPerMeta );
+  uint32_t group_idx_cyclic = start_idx / kElemsPerMeta;
+  uint32_t ctrl_idx         = start_idx - ( group_idx_cyclic * kElemsPerMeta );
   
   __m256i  zero_lane    = _mm256_setzero_si256();
   while ( group_idx_cyclic < this->m_GroupCount )
@@ -187,7 +177,7 @@ const V* HashMap64AVX2< V >::At( uint64_t key ) const
           // Last 7 bits of hash match, very potentially a match. Gonna do a cache invalidate here to check
           if ( meta->m_Control[ i_ctrl_norm ] == ctrl_cmp)
           {
-            Elem* elem = &this->m_Elems[ group_idx * HashMap64ImplBase< V >::kElemsPerMeta + i_ctrl_norm ];
+            Elem* elem = &this->m_Elems[ group_idx * kElemsPerMeta + i_ctrl_norm ];
             if ( elem->m_Key == key )
             { 
               // We found it, return it!
@@ -216,8 +206,8 @@ void HashMap64AVX2< V >::Remove( uint64_t key )
 
   ControlT ctrl_cmp         = HashMap64ImplBase< V >::kIsNotEmpty | HashMap64ImplBase< V >::CtrlFor( key );
   uint32_t start_idx        = HashMap64ImplBase< V >::HashFunction( key ) % this->m_Capacity;
-  uint32_t group_idx_cyclic = start_idx / HashMap64ImplBase< V >::kElemsPerMeta;
-  uint32_t ctrl_idx         = start_idx - ( group_idx_cyclic * HashMap64ImplBase< V >::kElemsPerMeta );
+  uint32_t group_idx_cyclic = start_idx / kElemsPerMeta;
+  uint32_t ctrl_idx         = start_idx - ( group_idx_cyclic * kElemsPerMeta );
   
   __m256i  zero_lane    = _mm256_setzero_si256();
   while ( group_idx_cyclic < this->m_GroupCount )
@@ -226,7 +216,7 @@ void HashMap64AVX2< V >::Remove( uint64_t key )
     Group*   meta        = &this->m_Meta[ group_idx ];
     // If anything has been set here before, it's a tombstone sentinel whether or not the empty bit is set
     __m256i  meta_data1   = _mm256_loadu_si256( (const __m256i*)meta );
-    __m256i  meta_data2   = _mm256_loadu_si256( (const __m256i*)&meta->m_Control[ HashMap64ImplBase< V >::kElemsPerMeta / 2 ] );
+    __m256i  meta_data2   = _mm256_loadu_si256( (const __m256i*)&meta->m_Control[ kHalfElemsPerMeta ] );
     __m256i  meta_eq_0_1  = _mm256_cmpeq_epi32( meta_data1, zero_lane );
     __m256i  meta_eq_0_2  = _mm256_cmpeq_epi32( meta_data2, zero_lane );
     uint32_t used_bitset1 = _mm256_movemask_epi8( meta_eq_0_1 );
@@ -241,7 +231,7 @@ void HashMap64AVX2< V >::Remove( uint64_t key )
         // Last 7 bits of hash match, very potentially a match. Gonna do a cache invalidate here to check
         if ( meta->m_Control[ i_ctrl ] == ctrl_cmp )
         {
-          Elem* elem = &this->m_Elems[ group_idx * HashMap64ImplBase< V >::kElemsPerMeta + i_ctrl ];
+          Elem* elem = &this->m_Elems[ group_idx * kElemsPerMeta + i_ctrl ];
           if ( elem->m_Key == key )
           { 
             // We found it, remove it!
@@ -278,7 +268,7 @@ bool HashMap64AVX2< V >::IsFull() const
     {
       static_assert( HashMap64ImplBase< V >::kIsNotEmpty == 0x80000000, "Assuming these are equal for this algorithm" );
 
-      __m256i  meta_data   = _mm256_loadu_si256( (const __m256i*)GetSubGrp( i_grp, i_subgrp ) );
+      __m256i  meta_data   = _mm256_loadu_epi32( GetSubGrp( i_grp, i_subgrp ) );
       uint32_t used_bitset = _mm256_movemask_epi8( meta_data );
                used_bitset = _pext_u32( used_bitset, 0x88888888 );
 
@@ -302,7 +292,7 @@ bool HashMap64AVX2< V >::IsEmpty() const
     {
       static_assert( HashMap64ImplBase< V >::kIsNotEmpty == 0x80000000, "Assuming these are equal for this algorithm" );
 
-      __m256i  meta_data   = _mm256_loadu_si256( (const __m256i*)GetSubGrp( i_grp, i_subgrp ) );
+      __m256i  meta_data   = _mm256_loadu_epi32( GetSubGrp( i_grp, i_subgrp ) );
       uint32_t used_bitset = _mm256_movemask_epi8( meta_data );
                used_bitset = _pext_u32( used_bitset, 0x88888888 );
 
@@ -326,13 +316,13 @@ uint64_t HashMap64AVX2< V >::GetFirstKey()
     {
       static_assert( HashMap64ImplBase< V >::kIsNotEmpty == 0x80000000, "Assuming these are equal for this algorithm" );
 
-      __m256i  meta_data   = _mm256_loadu_si256( (const __m256i*)GetSubGrp( i_grp, i_subgrp ) );
+      __m256i  meta_data   = _mm256_loadu_epi32( GetSubGrp( i_grp, i_subgrp ) );
       uint32_t used_bitset = _mm256_movemask_epi8( meta_data );
                used_bitset = _pext_u32( used_bitset, 0x88888888 );
       if ( used_bitset > 0 )
       {
         uint32_t first_idx = std::countr_zero( used_bitset ) / 4 + ( i_subgrp * 8);
-        return this->m_Elems[ i_grp * HashMap64ImplBase< V >::kElemsPerMeta + first_idx ].m_Key;
+        return this->m_Elems[ i_grp * kElemsPerMeta + first_idx ].m_Key;
       }
     }
   }
@@ -342,7 +332,7 @@ uint64_t HashMap64AVX2< V >::GetFirstKey()
 
 //---------------------------------------------------------------------------------
 template< typename V >
-inline uint8_t* HashMap64AVX2<V>::GetSubGrp( uint32_t grp_idx, uint32_t subgrp ) const
+inline HashMap64AVX2< V >::ControlT* HashMap64AVX2< V >::GetSubGrp( uint32_t grp_idx, uint32_t subgrp ) const
 {
-  return ((uint8_t*)&this->m_Meta[grp_idx]) + ( subgrp * 32 );
+  return &this->m_Meta[ grp_idx ].m_Control[ subgrp * kHalfElemsPerMeta ];
 }
